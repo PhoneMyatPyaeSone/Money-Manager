@@ -1,0 +1,5 @@
+.venv
+money_manager.fs
+money_manager.fs.index
+money_manager.fs.lock
+money_manager.fs.tmp
