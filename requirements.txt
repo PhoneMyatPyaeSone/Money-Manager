@@ -6,3 +6,4 @@ tkcalendar
 ZODB
 transaction
 uuid
+matplotlib

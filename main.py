@@ -6,18 +6,24 @@ from ZODB import DB
 from ZODB.FileStorage import FileStorage
 import transaction
 import uuid
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.ticker import FuncFormatter
+from matplotlib.figure import Figure
 
 class MoneyManagerApp(customtkinter.CTk):
     def __init__(self):
         super().__init__()
         self.title("Money Manager")
         self.geometry("800x600")
+        global categories 
+        categories = ["Food", "Transport", "Rent", "Salary", "Freelance", "Bonous","Others"]
         customtkinter.set_appearance_mode("dark")
 
         # ZODB Setup
         self.setup_db()
 
-        self.menu = Menu(master=self, callback=self.filter_data_by_month)
+        self.menu = Menu(master=self, callback=self.filter_data_by_month, get_data_callback=self.get_data)
         self.menu.pack()
 
 
@@ -26,7 +32,7 @@ class MoneyManagerApp(customtkinter.CTk):
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        self.root.clear()
+        self.root.clear()  # Clear the root object
 
     def load_data(self):
         income_data = self.root.get("income", {})
@@ -44,7 +50,7 @@ class MoneyManagerApp(customtkinter.CTk):
             all_data[date] = combined_entries
 
         # Update both dashboard and accounts based on all data
-        self.update_dashboard_totals(all_data)  # Ensure account totals are updated
+        self.update_dashboard_totals(all_data)
         self.menu.dashboard.show_data(all_data)
 
 
@@ -125,6 +131,8 @@ class MoneyManagerApp(customtkinter.CTk):
                     break
 
         transaction.commit()
+        self.load_data()
+        self.menu.charts.update_charts()
 
         current_month = self.menu.dashboard_label.month_combobox.get()
         current_year = self.menu.dashboard_label.year_combobox.get()
@@ -197,6 +205,7 @@ class MoneyManagerApp(customtkinter.CTk):
 
         self.menu.dashboard.show_data(filtered_data)
         self.update_dashboard_totals(filtered_data) 
+        self.menu.charts.update_charts(filtered_data)
 
     def update_dashboard_totals(self, filtered_data):
         account_totals = {
@@ -224,8 +233,17 @@ class MoneyManagerApp(customtkinter.CTk):
         self.menu.dashboard_label.update(total_income, total_expense, total_balance)
         self.menu.accounts.update_totals(account_totals)
 
+    def get_data(self):
+        income_data = dict(self.root.get("income", {}))
+        expense_data = dict(self.root.get("expense", {}))
+
+        return {
+            "income": income_data,
+            "expense": expense_data
+        }
+
 class Menu(customtkinter.CTkTabview):
-    def __init__(self, master, callback):
+    def __init__(self, master, callback, get_data_callback):
         super().__init__(master)
         self.app = master
         self.add("Dashboard")
@@ -241,6 +259,10 @@ class Menu(customtkinter.CTkTabview):
 
         self.dashboard = Dashboard(master=self.tab("Dashboard"), app=self.app)
         self.dashboard.pack()
+
+        # Charts
+        self.charts = Charts(master=self.tab("Charts"), get_data_callback=get_data_callback)
+        self.charts.pack(expand=True, fill="both")
 
         # Accounts
         self.accounts = Accounts(master=self.tab("Accounts"))
@@ -297,10 +319,10 @@ class Dashboard_Label(customtkinter.CTkFrame):
     def update_date(self, event=None):
         selected_month = self.month_combobox.get()
         selected_year = self.year_combobox.get()
-        self.callback(f"{selected_month} {selected_year}")
+        selected_month_year = f"{selected_month} {selected_year}"
+        self.callback(selected_month_year)
     
     def set_month_year(self, month, year):
-        """Set the month and year in the comboboxes."""
         self.month_combobox.set(month)
         self.year_combobox.set(year)
         self.update_date()
@@ -364,6 +386,104 @@ class Dashboard(customtkinter.CTkFrame):
 
                 row += 1  
 
+class Charts(customtkinter.CTkFrame):
+    def __init__(self, master, get_data_callback):
+        super().__init__(master)
+        self.get_data_callback = get_data_callback  # Store the method for fetching data
+        self.chart_frame = customtkinter.CTkScrollableFrame(self, width=780, height=600)
+        self.chart_frame.pack(fill="both", expand=True)
+
+        self.update_charts(self.get_data_callback())
+
+    def update_charts(self, filtered_data):
+
+        # Clear old charts
+        for widget in self.chart_frame.winfo_children():
+            widget.destroy()
+
+        self.display_income_vs_expense(filtered_data)
+        self.display_income_by_category(filtered_data)
+        self.display_expense_by_category(filtered_data)
+
+    def display_income_vs_expense(self, data):
+        income_total = sum(
+            float(entry["amount"])
+            for entries in data.values()
+            for entry in entries if entry["type"] == "Income"
+        )
+        expense_total = sum(
+            float(entry["amount"])
+            for entries in data.values()
+            for entry in entries if entry["type"] == "Expense"
+        )
+
+        # Create chart
+        fig = Figure(figsize=(5, 3))
+        ax = fig.add_subplot(111)
+        ax.bar(["Income", "Expense"], [income_total, expense_total], color=["green", "red"])
+        ax.set_title("Income vs Expense")
+
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+        canvas.get_tk_widget().pack()
+        canvas.draw()
+
+    def display_income_by_category(self, data):
+        category_totals = {}
+        
+        # Iterate over all entries in the filtered data
+        for entries in data.values():
+            for entry in entries:
+                if entry["type"] == "Income":  # Only consider income entries
+                    category = entry["category"]
+                    amount = float(entry["amount"])
+                    category_totals[category] = category_totals.get(category, 0) + amount
+
+        if category_totals:  # Only plot if there's data
+            fig = Figure(figsize=(4, 3))
+            ax = fig.add_subplot(111)
+            ax.pie(
+                category_totals.values(), 
+                labels=category_totals.keys(), 
+                autopct='%1.1f%%', 
+                startangle=140
+            )
+            ax.set_title("Income by Category")
+
+            canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+            canvas.get_tk_widget().pack(pady=10)
+            canvas.draw()
+        else:
+            no_data_label = customtkinter.CTkLabel(self.chart_frame, text="No Income Data Available")
+            no_data_label.pack(pady=10)
+
+    def display_expense_by_category(self, data):
+        category_totals = {}
+
+        # Iterate over all entries in the filtered data
+        for entries in data.values():
+            for entry in entries:
+                if entry["type"] == "Expense":  # Only consider expense entries
+                    category = entry["category"]
+                    amount = float(entry["amount"])
+                    category_totals[category] = category_totals.get(category, 0) + amount
+
+        if category_totals:  # Only plot if there's data
+            fig = Figure(figsize=(4, 3))
+            ax = fig.add_subplot(111)
+            ax.pie(
+                category_totals.values(), 
+                labels=category_totals.keys(), 
+                autopct='%1.1f%%', 
+                startangle=140
+            )
+            ax.set_title("Expense by Category")
+
+            canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+            canvas.get_tk_widget().pack(pady=10)
+            canvas.draw()
+        else:
+            no_data_label = customtkinter.CTkLabel(self.chart_frame, text="No Expense Data Available")
+            no_data_label.pack(pady=10)
         
 class Accounts(customtkinter.CTkFrame):
     def __init__(self, master):
@@ -475,7 +595,7 @@ class AddExpense(customtkinter.CTkToplevel):
 
         # Category Entry
         self.category_label = customtkinter.CTkLabel(master=self, text="Category")
-        self.category_select = customtkinter.CTkComboBox(master=self, values=["Food", "Transport", "Rent", "Others"])
+        self.category_select = customtkinter.CTkComboBox(master=self, values=categories)
         self.category_label.grid(row=3, column=0, padx=10, pady=10)
         self.category_select.grid(row=3, column=1, padx=10, pady=10, sticky="e")
 
@@ -539,7 +659,7 @@ class EditForm(customtkinter.CTkToplevel):
 
         # Category
         self.category_label = customtkinter.CTkLabel(master=self, text="Category")
-        self.category_select = customtkinter.CTkComboBox(master=self, values=["Food", "Transport", "Rent", "Others"])
+        self.category_select = customtkinter.CTkComboBox(master=self, values=categories)
         self.category_select.set(entry["category"])
         self.category_label.grid(row=3, column=0, padx=10, pady=10)
         self.category_select.grid(row=3, column=1, padx=10, pady=10)
